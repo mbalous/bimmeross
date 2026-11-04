@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <BridgeClasses>$(MSBuildProjectDirectory)\obj\$(Configuration)\psdz-bridge</BridgeClasses>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\BmwCoder.Core\BmwCoder.Core.csproj" />
+    <None Include="$(BridgeClasses)\PsdzReadOnlyBridge.class" Link="psdz-bridge\PsdzReadOnlyBridge.class"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <InternalsVisibleTo Include="BmwCoder.Psdz.Tests" />
+  </ItemGroup>
+  <Target Name="CompileReadOnlyBridge" BeforeTargets="PrepareForBuild"
+          Inputs="$(MSBuildProjectDirectory)\java\PsdzReadOnlyBridge.java"
+          Outputs="$(BridgeClasses)\PsdzReadOnlyBridge.class">
+    <MakeDir Directories="$(BridgeClasses)" />
+    <Exec Command="javac --release 8 -Xlint:-options -d &quot;$(BridgeClasses)&quot; &quot;$(MSBuildProjectDirectory)\java\PsdzReadOnlyBridge.java&quot;" />
+  </Target>
+</Project>

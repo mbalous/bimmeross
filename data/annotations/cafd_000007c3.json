@@ -1,0 +1,15 @@
+{
+  "caf": "cafd_000007c3",
+  "ecu": "GHAS",
+  "address": "0x0F",
+  "description": "GHAS (0x0F), block 3000 DataSetSelector. Names and F082/F082GTS values from an E-Sys FDL tree screenshot; F080/F083 values are derived from the PSdZ CAF F030 selection rules.",
+  "source": "E-Sys FDL tree (user supplied screenshot, CAF GHAS01) + PSdZ CAF selection rules. E-Sys lists no separate F082CS entry; the CAF gives CS the same value as GTS (0C).",
+  "verifiedVersions": ["019_000_000"],
+  "blocks": [
+    { "block": "3000", "name": "DataSetSelector" }
+  ],
+  "parameters": [
+    { "block": "3000", "byte": 0, "name": "DSS TASC", "values": { "04": "F080 (rule-derived)", "05": "F082", "06": "F083 (rule-derived)", "0C": "F082GTS (also used for F082CS / F080CS per CAF rule)" }, "note": "E-Sys option list: F006, F006NBR, F010, F010NBR, F012, F012NBR, F013, F013NBR, F080, F082, F082GTS, F083, F087, Unknown x3, Not Supported. Only F082=05 and F082GTS=0C were shown with values." },
+    { "block": "3000", "byte": 1, "name": "DSS IPM", "values": { "04": "F080 (rule-derived)", "05": "F082", "06": "F083 (rule-derived)", "0C": "F082GTS (also used for F082CS / F080CS per CAF rule)" }, "note": "Same option list as DSS TASC. F082GTS=0C shown in E-Sys." }
+  ]
+}

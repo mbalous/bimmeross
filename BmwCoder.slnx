@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BmwCoder.App/BmwCoder.App.csproj" />
+    <Project Path="src/BmwCoder.Coding/BmwCoder.Coding.csproj" />
+    <Project Path="src/BmwCoder.Core/BmwCoder.Core.csproj" />
+    <Project Path="src/BmwCoder.Psdz/BmwCoder.Psdz.csproj" />
+    <Project Path="src/BmwCoder.Transport/BmwCoder.Transport.csproj" />
+    <Project Path="src/BmwCoder.Tui/BmwCoder.Tui.csproj" />
+    <Project Path="src/BmwCoder.Uds/BmwCoder.Uds.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BmwCoder.Coding.Tests/BmwCoder.Coding.Tests.csproj" />
+    <Project Path="tests/BmwCoder.Psdz.Tests/BmwCoder.Psdz.Tests.csproj" />
+    <Project Path="tests/BmwCoder.Transport.Tests/BmwCoder.Transport.Tests.csproj" />
+    <Project Path="tests/BmwCoder.Uds.Tests/BmwCoder.Uds.Tests.csproj" />
+    <Project Path="tests/BmwCoder.Cli.Tests/BmwCoder.Cli.Tests.csproj" />
+    <Project Path="tests/BmwCoder.Tui.Tests/BmwCoder.Tui.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/HsfzPing/HsfzPing.csproj" />
+    <Project Path="tools/BmwCoder.Cli/BmwCoder.Cli.csproj" />
+  </Folder>
+</Solution>

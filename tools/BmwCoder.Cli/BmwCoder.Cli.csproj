@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>12.0</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>bmwcoder</AssemblyName>
+    <RootNamespace>BmwCoder.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\BmwCoder.Core\BmwCoder.Core.csproj" />
+    <ProjectReference Include="..\..\src\BmwCoder.Psdz\BmwCoder.Psdz.csproj" />
+    <ProjectReference Include="..\..\src\BmwCoder.Transport\BmwCoder.Transport.csproj" />
+    <ProjectReference Include="..\..\src\BmwCoder.Uds\BmwCoder.Uds.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.1" />
+    <None Include="..\..\data\annotations\*.json" Link="annotations\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\LICENSE" Link="LICENSE" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\README.md" Link="README.md" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

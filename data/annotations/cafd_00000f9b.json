@@ -1,0 +1,18 @@
+{
+  "caf": "cafd_00000f9b",
+  "ecu": "ASD",
+  "address": "0x3F",
+  "description": "Active Sound Design, F020/F021 (F80/F82 M3/M4). PSdZ CAFs carry no parameter names; these labels come from an E-Sys FDL tree screenshot of CAFD_00000F9B_001_046_001.ncd.",
+  "source": "E-Sys FDL tree (user supplied screenshot) + CAFD_00000F9B_001_046_001.ncd, block 3000 = 0D 0A 01 02 00 00 03 00",
+  "verifiedVersions": ["001_046_001"],
+  "parameters": [
+    { "block": "3000", "byte": 0, "name": "Model Range", "values": { "0D": "F020 / F021" } },
+    { "block": "3000", "byte": 1, "name": "Engine", "values": { "0A": "S55B30" } },
+    { "block": "3000", "byte": 2, "name": "Audio Level", "values": { "01": "Hifi" } },
+    { "block": "3000", "byte": 3, "name": "Power Class", "values": { "02": "ML" } },
+    { "block": "3000", "byte": 4, "name": "Competition Paket", "values": { "00": "No" } },
+    { "block": "3000", "byte": 5, "name": "Country Variant", "values": { "00": "ECE" } },
+    { "block": "3000", "byte": 6, "name": "Construction Stage", "values": { "03": "later or equal 07/14" } },
+    { "block": "3000", "byte": 7, "name": "Gear Shifting Sound", "values": { "00": "No" } }
+  ]
+}

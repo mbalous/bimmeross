@@ -1,0 +1,22 @@
+{
+  "series": "F030",
+  "source": "Derived from PSdZ CAF selection rules (cafd_00001a33 DSC, cafd_00001a2f EPS) cross-checked against E-Sys EPS Variantencodierung names. Criteria meanings are inferred, not read from ISTA (encrypted).",
+  "criteria": {
+    "1495": { "meaning": "F80 (M3)", "confidence": "inferred" },
+    "1496": { "meaning": "F82 (M4)", "confidence": "inferred; EPS F82=01, F82GTS=04 (1496+2919)" },
+    "1497": { "meaning": "F83 (M4 Cabrio)", "confidence": "inferred; EPS F83=02" },
+    "2919": { "meaning": "GTS/CS special-model flag (F82)", "confidence": "inferred; EPS F82GTS=04" },
+    "2712": { "meaning": "F80 CS flag", "confidence": "inferred from DSC value 0B and EPS 04 rule" },
+    "2121": { "meaning": "Competition package", "confidence": "inferred from DSC values 03/04/05" },
+    "3285": { "meaning": "Replacement part (_rep) flag", "confidence": "inferred from EPS 05 F80/F82/F83_rep" },
+    "255:1707": { "meaning": "Build date YYMM threshold: 1707 = July 2017 (GTS before, CS from)", "confidence": "inferred" }
+  },
+  "models": {
+    "F80":     { "label": "M3",                "criteria": [1495] },
+    "F82":     { "label": "M4 Coupe",          "criteria": [1496] },
+    "F83":     { "label": "M4 Convertible",    "criteria": [1497] },
+    "F82GTS":  { "label": "M4 GTS",            "criteria": [1496, 2919], "build": 1612, "note": "GTS built before 07/2017" },
+    "F82CS":   { "label": "M4 CS",             "criteria": [1496, 2919], "build": 1801, "note": "CS built from 07/2017" },
+    "F80CS":   { "label": "M3 CS",             "criteria": [1495, 2712], "build": 1801 }
+  }
+}
