@@ -1,6 +1,5 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/BmwCoder.App/BmwCoder.App.csproj" />
     <Project Path="src/BmwCoder.Coding/BmwCoder.Coding.csproj" />
     <Project Path="src/BmwCoder.Core/BmwCoder.Core.csproj" />
     <Project Path="src/BmwCoder.Psdz/BmwCoder.Psdz.csproj" />

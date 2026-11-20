@@ -163,15 +163,19 @@ public sealed partial class CodingSession
     }
 
     public async Task<IReadOnlyList<DiagnosticReading>> ReadDmeReportAsync(
-        IProgress<DiagnosticReading>? progress = null, CancellationToken cancellationToken = default)
+        IProgress<DiagnosticReading>? progress = null, CancellationToken cancellationToken = default,
+        bool stopOnDisconnect = false)
     {
         var readings = new List<DiagnosticReading>();
         await ReadOneAsync("22F150", "SGBD index", 0xF150).ConfigureAwait(false);
         foreach (var definition in DiagnosticCatalog.DmeReads.Where(d => d.Did != 0xF150))
         {
+            if (stopOnDisconnect && !_connection.IsConnected)
+                return readings;
             await ReadOneAsync($"22{definition.Did:X4}", definition.Name, definition.Did).ConfigureAwait(false);
         }
-        await ReadOneAsync($"1902{DiagnosticFault.FailureStatusMask:X2}", "Fault memory", null).ConfigureAwait(false);
+        if (!stopOnDisconnect || _connection.IsConnected)
+            await ReadOneAsync($"1902{DiagnosticFault.FailureStatusMask:X2}", "Fault memory", null).ConfigureAwait(false);
         return readings;
 
         async Task ReadOneAsync(string request, string name, ushort? did)

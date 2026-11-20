@@ -11,6 +11,34 @@ namespace BmwCoder.Tui.Tests;
 public sealed class TerminalTests
 {
     [TestMethod]
+    public void DiagnosticResultsShowSelectedReadingAndFilter()
+    {
+        var workbench = new Workbench(new DemoVehicle(), new AppSettings());
+        try
+        {
+            var driver = new FakeDriver();
+            Application.Init(driver);
+            driver.SetBufferSize(120, 40);
+            using var window = new WorkbenchWindow(workbench, "unused-settings.json");
+            using var state = Application.Begin(window);
+            workbench.ConnectAsync().GetAwaiter().GetResult();
+            workbench.ReadDidAsync(0x10, 0xF190).GetAwaiter().GetResult();
+            workbench.ProbeAsync(0x63).GetAwaiter().GetResult();
+            window.ShowScreen("Diagnostics");
+            window.Filter("TesterPresent");
+            Application.Refresh();
+            StringAssert.Contains(Screen(driver), "TesterPresent");
+            StringAssert.Contains(Screen(driver), "7E00");
+            Assert.IsFalse(Screen(driver).Contains("DID 0xF190"));
+        }
+        finally
+        {
+            Application.Shutdown();
+            workbench.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        }
+    }
+
+    [TestMethod]
     public void ParameterBrowserSearchesActualValuesAndShowsUnknownFieldsWithoutEditing()
     {
         var workbench = new Workbench(new DemoVehicle(), new AppSettings(), codingReader: new SyntheticCodingReader());

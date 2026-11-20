@@ -71,6 +71,28 @@ public sealed class WorkspaceTests : IDisposable
     }
 
     [TestMethod]
+    public void RawBlockDraftEditsRevertsAndExportsWithoutWritingToVehicle()
+    {
+        byte[] source = new byte[32];
+        var draft = new RawBlockDraft(0x40, 0x3000, source);
+        draft.SetByte(0, 0x12);
+        Assert.AreEqual(0, source[0]);
+        Assert.AreEqual(1, draft.ChangedBytes);
+        Assert.IsFalse(draft.VerifyChecksum());
+        draft.ApplyChecksum();
+        Assert.IsTrue(draft.VerifyChecksum());
+        Assert.AreEqual(2, draft.ChangedBytes);
+        string path = Path.Combine(_directory, "draft.bin");
+        draft.ExportNewFile(path);
+        Assert.AreEqual(0x12, File.ReadAllBytes(path)[31]);
+        Assert.ThrowsException<IOException>(() => draft.ExportNewFile(path));
+        draft.Revert();
+        Assert.AreEqual(0, draft.ChangedBytes);
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => draft.SetByte(32, 0));
+        Assert.ThrowsException<InvalidOperationException>(() => new RawBlockDraft(0x10, 0xF190, source).ApplyChecksum());
+    }
+
+    [TestMethod]
     public void BackupInspectorChecksHashSizeAndFilenameWithoutRepairingEvidence()
     {
         byte[] bytes = { 1, 2, 3 };

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using BmwCoder.Core.Diagnostics;
 using BmwCoder.Core.Models;
 using BmwCoder.Core.Workspace;
@@ -13,20 +14,31 @@ public sealed class Workbench : IAsyncDisposable
     private readonly ICodingReader? _codingReader;
     private readonly SemaphoreSlim _operation = new(1, 1);
     private readonly Queue<string> _logs = new();
+    private readonly List<DiagnosticReading> _diagnosticReadings = new();
+    private readonly Dictionary<DiagnosticReading, (string? Host, int? Port, string? Vin)> _diagnosticEndpoints = new();
     private readonly object _stateLock = new();
     private CancellationTokenSource? _cancellation;
     private bool _disposed;
+    private string? _connectedHost;
+    private int? _connectedPort;
     public event Action? Changed;
     public AppSettings Settings { get; }
     public bool IsDemo => _vehicle.IsDemo;
     public bool IsConnected => _vehicle.IsConnected;
+    public TimeSpan RequestTimeout => _vehicle.RequestTimeout;
+    public string BackupDirectory => _vehicle.BackupDirectory;
     public string? Vin => _vehicle.Vin;
     public bool IsBusy { get; private set; }
     public string Status { get; private set; } = "Disconnected - read-only preview";
     public string Details { get; private set; } = PreviewCapabilities.CodingUnavailable;
     public IReadOnlyList<EcuInfo> Ecus { get; private set; } = Array.Empty<EcuInfo>();
+    public IReadOnlyList<DiagnosticDefinition> DiagnosticDefinitions { get; private set; } = Array.Empty<DiagnosticDefinition>();
+    public byte? DiagnosticDefinitionEcu { get; private set; }
     public FaXmlDocument? Fa { get; private set; }
     public CodingFile? Coding { get; private set; }
+    public RawBlockDraft? RawDraft { get; private set; }
+    public BackupInspection? RestoreInspection { get; private set; }
+    public string? RestoreDirectory { get; private set; }
     public CafDefinition? Caf { get; private set; }
     public DecodedCoding? Decoded { get; private set; }
     public string DecodedSummary => Decoded == null
@@ -51,6 +63,10 @@ public sealed class Workbench : IAsyncDisposable
     {
         get { lock (_stateLock) return _logs.ToArray(); }
     }
+    public IReadOnlyList<DiagnosticReading> DiagnosticReadings
+    {
+        get { lock (_stateLock) return _diagnosticReadings.ToArray(); }
+    }
     public TimeSpan OperationTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     public Workbench(IReadOnlyVehicle vehicle, AppSettings settings, ICafReader? cafReader = null, ICodingReader? codingReader = null)
@@ -65,7 +81,16 @@ public sealed class Workbench : IAsyncDisposable
     public Task ConnectAsync() => ExecuteAsync("Connect", async token =>
     {
         Ecus = Array.Empty<EcuInfo>();
-        await _vehicle.ConnectAsync(Settings.Host, Settings.Port, token).ConfigureAwait(false);
+        _connectedHost = null;
+        _connectedPort = null;
+        string host = Settings.Host;
+        int port = Settings.Port;
+        await _vehicle.ConnectAsync(host, port, token).ConfigureAwait(false);
+        if (!IsDemo)
+        {
+            _connectedHost = host;
+            _connectedPort = port;
+        }
         return $"{(IsDemo ? "DEMO " : "")}VIN: {Vin}\nConnected in read-only mode. Use Discover to list ECUs.";
     });
 
@@ -97,14 +122,191 @@ public sealed class Workbench : IAsyncDisposable
     });
 
     public Task ReadDidAsync(byte ecu, ushort did) => ExecuteAsync("Read DID", async token =>
-        Format(await _vehicle.ReadDidAsync(ecu, did, token).ConfigureAwait(false)));
+        Record(await _vehicle.ReadDidAsync(ecu, did, token).ConfigureAwait(false)));
 
     public Task ReadFaultsAsync(byte ecu) => ExecuteAsync("Read faults", async token =>
-        Format(await _vehicle.ReadFaultsAsync(ecu, token).ConfigureAwait(false)));
+        Record(await _vehicle.ReadFaultsAsync(ecu, token).ConfigureAwait(false)));
+
+    public Task ProbeAsync(byte ecu) => ExecuteAsync("Check ECU", async token =>
+        Record(await _vehicle.ProbeAsync(ecu, token).ConfigureAwait(false)));
+
+    public Task ReadRequestAsync(byte ecu, byte[] request) => ExecuteAsync("Read-only request", async token =>
+        Record(await _vehicle.ReadRequestAsync(ecu, request, token).ConfigureAwait(false)));
+
+    public Task ReadDmeReportAsync() => ExecuteAsync("Read DME report", async token =>
+    {
+        var partial = new List<DiagnosticReading>();
+        Details = "DME report (ECU 0x12). Reading; no faults are cleared.";
+        var progress = new InlineProgress<DiagnosticReading>(reading =>
+        {
+            partial.Add(reading);
+            Record(reading);
+            Details = "DME report (ECU 0x12). Results include failures; no faults were cleared.\n\n" +
+                string.Join("\n\n", partial.Select(Format));
+            Changed?.Invoke();
+        });
+        var readings = await _vehicle.ReadDmeReportAsync(progress, token).ConfigureAwait(false);
+        string completeness = readings.Count < DiagnosticCatalog.DmeReads.Count + 1 ? "PARTIAL; connection lost or report stopped. " : "";
+        return $"DME report (ECU 0x12). {completeness}Results include failures; no faults were cleared.\n\n" +
+            string.Join("\n\n", readings.Select(Format));
+    }, preservePartialOnCancellation: true, timeout: TimeSpan.FromMilliseconds(
+        Math.Max(OperationTimeout.TotalMilliseconds, RequestTimeout.TotalMilliseconds * 12)));
+
+    public Task SetRequestTimeoutAsync(int milliseconds) => ExecuteAsync("Set request timeout", _ =>
+    {
+        if (milliseconds is < 100 or > 30000)
+            throw new ArgumentOutOfRangeException(nameof(milliseconds), "Request timeout must be between 100 and 30000 milliseconds.");
+        _vehicle.RequestTimeout = TimeSpan.FromMilliseconds(milliseconds);
+        return Task.FromResult($"Diagnostic request timeout: {milliseconds} ms (not saved).");
+    });
+
+    public Task ClearDiagnosticReadingsAsync() => ExecuteAsync("Clear diagnostic results", _ =>
+    {
+        lock (_stateLock)
+        {
+            _diagnosticReadings.Clear();
+            _diagnosticEndpoints.Clear();
+        }
+        return Task.FromResult("Diagnostic results cleared.");
+    });
+
+    public Task ExportDiagnosticReadingsAsync(string path) => ExecuteAsync("Export diagnostic results", async token =>
+    {
+        var readings = DiagnosticReadings;
+        if (readings.Count == 0)
+            throw new InvalidOperationException("There are no diagnostic results to export.");
+        (string? Host, int? Port, string? Vin)[] endpoints;
+        lock (_stateLock)
+            endpoints = readings.Select(r => _diagnosticEndpoints[r]).Distinct().ToArray();
+        if (endpoints.Length != 1)
+            throw new InvalidOperationException("Results are from different connections. Clear the results before exporting a single-session report.");
+        await using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        var export = new { schema = "bmwcoder/diagnostics/1", host = endpoints[0].Host, port = endpoints[0].Port, vin = endpoints[0].Vin, read_only = true, readings };
+        await JsonSerializer.SerializeAsync(stream, export, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
+        }, token).ConfigureAwait(false);
+        return $"Exported {readings.Count} diagnostic results to {path}.";
+    });
+
+    public string DiagnosticCommand(DiagnosticReading reading)
+    {
+        (string? Host, int? Port, string? Vin) endpoint;
+        lock (_stateLock)
+            if (!_diagnosticEndpoints.TryGetValue(reading, out endpoint) || string.IsNullOrEmpty(reading.RequestHex))
+                throw new InvalidOperationException("Select a diagnostic result with a request first.");
+        if (endpoint.Host == null || endpoint.Port == null)
+            throw new InvalidOperationException("Synthetic or unconnected readings have no live CLI endpoint.");
+        string host = endpoint.Host.Replace("'", "''", StringComparison.Ordinal);
+        return $"bmwcoder raw --host '{host}' --port {endpoint.Port} --ecu 0x{reading.Ecu:X2} --pdu {reading.RequestHex} --json";
+    }
+
+    public Task ExportDiagnosticPayloadAsync(DiagnosticReading reading, string path) => ExecuteAsync("Export diagnostic payload", async token =>
+    {
+        if (!DiagnosticReadings.Contains(reading) || reading.Status != "ok" || string.IsNullOrEmpty(reading.PayloadHex))
+            throw new InvalidOperationException("Select a successful diagnostic result with a payload first.");
+        byte[] bytes = Convert.FromHexString(reading.PayloadHex);
+        await using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        await stream.WriteAsync(bytes, token).ConfigureAwait(false);
+        return $"Exported {bytes.Length} payload bytes to {path}.";
+    });
+
+    public Task OpenRawDraftAsync(DiagnosticReading reading) => ExecuteAsync("Open raw block draft", _ =>
+    {
+        if (!DiagnosticReadings.Contains(reading) || reading.Status != "ok" ||
+            reading.Did is not ushort did || string.IsNullOrEmpty(reading.PayloadHex))
+            throw new InvalidOperationException("Select a successful DID reading with a payload first.");
+        RawDraft = new RawBlockDraft(reading.Ecu, did, Convert.FromHexString(reading.PayloadHex));
+        return Task.FromResult(RawDraftSummary());
+    });
+
+    public Task EditRawDraftAsync(int offset, byte value) => ExecuteAsync("Edit raw block offline", _ =>
+    {
+        RequireRawDraft().SetByte(offset, value);
+        return Task.FromResult(RawDraftSummary());
+    });
+
+    public Task ShowRawDraftAsync() => ExecuteAsync("Show raw block", _ =>
+        Task.FromResult(RawDraftSummary()));
+
+    public Task RevertRawDraftAsync() => ExecuteAsync("Revert raw block", _ =>
+    {
+        RequireRawDraft().Revert();
+        return Task.FromResult(RawDraftSummary());
+    });
+
+    public Task VerifyRawChecksumAsync() => ExecuteAsync("Verify legacy checksum", _ =>
+    {
+        bool matches = RequireRawDraft().VerifyChecksum();
+        return Task.FromResult($"Legacy checksum {(matches ? "matches" : "does not match")}; this does not establish ECU compatibility or write safety.\n\n{RawDraftSummary()}");
+    });
+
+    public Task ApplyRawChecksumAsync() => ExecuteAsync("Apply legacy checksum offline", _ =>
+    {
+        RequireRawDraft().ApplyChecksum();
+        return Task.FromResult(RawDraftSummary());
+    });
+
+    public Task ExportRawDraftAsync(string path) => ExecuteAsync("Export raw block draft", token => Task.Run(() =>
+    {
+        token.ThrowIfCancellationRequested();
+        RequireRawDraft().ExportNewFile(path);
+        return $"Exported offline raw block to {path}. No vehicle write was performed.";
+    }, token));
+
+    public Task RequestRawWriteAsync() => ExecuteAsync("Write raw block", _ =>
+    {
+        RequireRawDraft();
+        throw new NotSupportedException("Live raw writes are disabled until a target-specific backend and safety qualification are available.");
+    });
+
+    public Task RequestLegacyBlockReadAsync() => ExecuteAsync("Legacy block read", _ =>
+        throw new NotSupportedException("Legacy extended-session block reads are disabled. Use a default-session DID read; some blocks may be unavailable."));
+
+    public Task LoadDiagnosticDataAsync(byte ecu) => ExecuteAsync("Load ODX diagnostics", async token =>
+    {
+        DiagnosticDefinitions = Array.Empty<DiagnosticDefinition>();
+        DiagnosticDefinitionEcu = null;
+        var definitions = await _vehicle.LoadDiagnosticDataAsync(Settings.PsdzDataPath, Settings.PsdzSeries, ecu, token).ConfigureAwait(false);
+        DiagnosticDefinitions = definitions;
+        DiagnosticDefinitionEcu = ecu;
+        return $"Loaded {definitions.Count} candidate DIDs for ECU 0x{ecu:X2}.\n" +
+            "Names and layouts are candidates, not a verified ECU variant.";
+    });
+
+    public Task ConfigureFaultTextsAsync() => ExecuteAsync("Configure ISTA fault texts", token =>
+    {
+        token.ThrowIfCancellationRequested();
+        _vehicle.ConfigureFaultTexts(Settings.IstaPath);
+        return Task.FromResult("ISTA fault texts configured for subsequent reads. Exact-code matches are not ECU-variant verified.");
+    });
+
+    public Task BackupSuggestedAsync() => ExecuteAsync("Snapshot suggested DIDs", async token =>
+    {
+        Details = "Reading suggested DIDs. This is not a full-vehicle or validated coding backup.";
+        var progress = new InlineProgress<ReadOnlyBackup>(result =>
+        {
+            Details = FormatBackup(result);
+            Changed?.Invoke();
+        });
+        var result = await _vehicle.BackupSuggestedAsync(Ecus, progress, token).ConfigureAwait(false);
+        return FormatBackup(result);
+    }, preservePartialOnCancellation: true, timeout: TimeSpan.FromMilliseconds(Math.Max(
+        OperationTimeout.TotalMilliseconds,
+        (Ecus.Sum(e => (double)e.SuggestedDids.Length) + 1) * RequestTimeout.TotalMilliseconds)));
+
+    private static string FormatBackup(ReadOnlyBackup result) =>
+        $"Suggested-DID snapshots: {result.Saved}; failures: {result.Failures.Count}\n" +
+        $"Directory: {result.Directory ?? "(no snapshots saved)"}\n" +
+        "Not a full-vehicle or validated coding backup. No session changes or vehicle writes were made.\n" +
+        string.Join("\n", result.Failures);
 
     public Task DisconnectAsync() => ExecuteAsync("Disconnect", _ =>
     {
         _vehicle.Disconnect();
+        _connectedHost = null;
+        _connectedPort = null;
         Ecus = Array.Empty<EcuInfo>();
         return Task.FromResult("Disconnected. Offline documents are preserved.");
     });
@@ -196,6 +398,30 @@ public sealed class Workbench : IAsyncDisposable
             string.Join("\n", report.Problems) + "\nRestore is unavailable in this read-only preview.";
     }, token));
 
+    public Task PrepareRestoreAsync(string path) => ExecuteAsync("Review restore", token => Task.Run(() =>
+    {
+        RestoreInspection = null;
+        RestoreDirectory = null;
+        var inspection = BackupInspector.Inspect(path, token);
+        RestoreInspection = inspection;
+        RestoreDirectory = Path.GetFullPath(path);
+        string identity = Vin == null ? "No verified vehicle connected." :
+            string.Equals(Vin, inspection.Manifest.Vin, StringComparison.OrdinalIgnoreCase)
+                ? "Backup VIN matches the connected vehicle."
+                : "Backup VIN does not match the connected vehicle.";
+        return $"Restore review: {inspection.Manifest.Entries.Count} snapshots. {identity}\n" +
+            $"Integrity: {(inspection.IsValid ? "verified (not evidence of compatibility)" : "FAILED")}\n" +
+            string.Join("\n", inspection.Problems) +
+            "\nLive restore is disabled until target-specific qualification.";
+    }, token));
+
+    public Task RequestRestoreAsync(BackupEntry entry) => ExecuteAsync("Restore blocked", _ =>
+    {
+        if (RestoreInspection == null || !RestoreInspection.Manifest.Entries.Contains(entry))
+            throw new InvalidOperationException("Inspect a backup and select a snapshot first.");
+        throw new NotSupportedException("Live restore is disabled until a target-specific backend and safety qualification are available.");
+    });
+
     public Task SaveSettingsAsync(string path) => ExecuteAsync("Save settings", token => Task.Run(() =>
     {
         Settings.SaveTo(path);
@@ -208,7 +434,8 @@ public sealed class Workbench : IAsyncDisposable
             _cancellation?.Cancel();
     }
 
-    private async Task ExecuteAsync(string name, Func<CancellationToken, Task<string>> action)
+    private async Task ExecuteAsync(string name, Func<CancellationToken, Task<string>> action,
+        bool preservePartialOnCancellation = false, TimeSpan? timeout = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!await _operation.WaitAsync(0).ConfigureAwait(false))
@@ -216,7 +443,7 @@ public sealed class Workbench : IAsyncDisposable
         CancellationTokenSource? cancellation = null;
         try
         {
-            cancellation = new CancellationTokenSource(OperationTimeout);
+            cancellation = new CancellationTokenSource(timeout ?? OperationTimeout);
             lock (_stateLock)
                 _cancellation = cancellation;
             IsBusy = true;
@@ -234,7 +461,7 @@ public sealed class Workbench : IAsyncDisposable
                 _vehicle.Disconnect();
                 Ecus = Array.Empty<EcuInfo>();
                 Status = $"{name}: canceled or timed out; vehicle disconnected";
-                Details = Status;
+                Details = preservePartialOnCancellation ? $"{Status}\n\n{Details}" : Status;
                 Log(Status);
                 throw;
             }
@@ -258,6 +485,16 @@ public sealed class Workbench : IAsyncDisposable
     }
 
     private FaXmlDocument RequireFa() => Fa ?? throw new InvalidOperationException("Import an FA XML document first.");
+    private RawBlockDraft RequireRawDraft() => RawDraft ?? throw new InvalidOperationException("Open a successful DID result as a raw block draft first.");
+
+    private string RawDraftSummary()
+    {
+        var draft = RequireRawDraft();
+        return $"OFFLINE RAW BLOCK DRAFT - ECU 0x{draft.Ecu:X2}, DID 0x{draft.Did:X4}\n" +
+            $"Bytes: {draft.Length}; changed: {draft.ChangedBytes}; SHA-256: {draft.Sha256}\n" +
+            "Legacy checksum definitions are unverified. A match does not establish compatibility or write safety. Vehicle writes are unavailable.\n\n" +
+            draft.Preview();
+    }
 
     private string FaSummary()
     {
@@ -279,12 +516,29 @@ public sealed class Workbench : IAsyncDisposable
         }
     }
 
-    private static string Format(DiagnosticReading reading) =>
+    private string Record(DiagnosticReading reading)
+    {
+        lock (_stateLock)
+        {
+            _diagnosticReadings.Add(reading);
+            _diagnosticEndpoints.Add(reading, (_connectedHost, _connectedPort, _vehicle.Vin));
+        }
+        return Format(reading);
+    }
+
+    public static string Format(DiagnosticReading reading) =>
         $"ECU {reading.Ecu:X2} - {reading.Name}\nStatus: {reading.Status} {reading.Error}\n" +
+        $"Time (UTC): {reading.Timestamp:O}\nNRC: {reading.Nrc ?? "(none)"}\nDecoder: {reading.DecoderSource ?? "(none)"}\n" +
         $"Request: {reading.RequestHex}\nResponse: {reading.ResponseHex}\nPayload: {reading.PayloadHex}\n" +
         string.Join("\n", reading.Values.Select(v => $"{v.Key}: {v.Value}")) + "\n" +
+        string.Join("\n", reading.Software.Select(s => $"{s.ProcessClass:X2}: {s.Id} {s.Version}")) + "\n" +
         string.Join("\n", reading.Faults.Select(f => $"{f.Code} / status {f.Status:X2}: {f.Description ?? f.DescriptionStatus}")) + "\n" +
         string.Join("\n", reading.Warnings);
+
+    private sealed class InlineProgress<T>(Action<T> report) : IProgress<T>
+    {
+        public void Report(T value) => report(value);
+    }
 
     public async ValueTask DisposeAsync()
     {

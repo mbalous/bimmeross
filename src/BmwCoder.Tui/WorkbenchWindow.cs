@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Diagnostics;
+using BmwCoder.Core.Diagnostics;
 using BmwCoder.Core.Models;
 using BmwCoder.Core.Workspace;
 using BmwCoder.Transport;
@@ -24,6 +26,10 @@ public sealed class WorkbenchWindow : Toplevel
     private XmlField[] _visibleFields = Array.Empty<XmlField>();
     private CafField[] _visibleCafFields = Array.Empty<CafField>();
     private CodingParameter[] _visibleParameters = Array.Empty<CodingParameter>();
+    private DiagnosticDefinition[] _visibleDefinitions = Array.Empty<DiagnosticDefinition>();
+    private DiagnosticReading[] _visibleDiagnostics = Array.Empty<DiagnosticReading>();
+    private BackupEntry[] _visibleRestoreEntries = Array.Empty<BackupEntry>();
+    private string[] _visibleLogs = Array.Empty<string>();
     public string CurrentScreen => _screen;
 
     public WorkbenchWindow(Workbench workbench, string settingsPath)
@@ -41,6 +47,17 @@ public sealed class WorkbenchWindow : Toplevel
                 new MenuItem("D_isconnect", "", () => Start(_workbench.DisconnectAsync)),
                 new MenuItem("_Read DID", "", ReadDid),
                 new MenuItem("Read _faults", "", ReadFaults),
+                new MenuItem("Check ECU _response", "", ProbeEcu),
+                new MenuItem("Read _DME report", "", ReadDmeReport),
+                new MenuItem("Read-only re_quest", "", ReadRequest),
+                new MenuItem("Load ODX _DIDs", "", LoadDiagnosticData),
+                new MenuItem("Read selected ODX DI_D", "", ReadSelectedDefinition),
+                new MenuItem("Configure ISTA fault te_xts", "", () => Start(_workbench.ConfigureFaultTextsAsync)),
+                new MenuItem("Show diagnostic resu_lts", "", () => ShowScreen("Diagnostics")),
+                new MenuItem("E_xport diagnostic results", "", () => SaveFile("Diagnostic results JSON", path => _workbench.ExportDiagnosticReadingsAsync(path))),
+                new MenuItem("Export selected _payload", "", ExportDiagnosticPayload),
+                new MenuItem("Copy selected CLI _command", "", CopyDiagnosticCommand),
+                new MenuItem("C_lear diagnostic results", "", () => Start(_workbench.ClearDiagnosticReadingsAsync)),
                 new MenuItem("_Quit (Ctrl+Q)", "", RequestQuit)
             }),
             new MenuBarItem("_Coding", new[]
@@ -53,7 +70,16 @@ public sealed class WorkbenchWindow : Toplevel
                 new MenuItem("Read CAF _definition", "", () => OpenFile("CAF definition", path => _workbench.ImportCafAsync(path))),
                 new MenuItem("Show CAF _fields", "", () => ShowScreen("CAF")),
                 new MenuItem("_Import file (raw preview)", "", () => OpenFile("Coding file", path => _workbench.ImportCodingAsync(path))),
-                new MenuItem("E_xport original bytes", "", () => SaveFile("New coding file", path => _workbench.ExportCodingAsync(path)))
+                new MenuItem("E_xport original bytes", "", () => SaveFile("New coding file", path => _workbench.ExportCodingAsync(path))),
+                new MenuItem("Open selected DID as raw _draft", "", OpenRawDraft),
+                new MenuItem("_Show raw draft", "", () => StartRawDraft(_workbench.ShowRawDraftAsync)),
+                new MenuItem("Edit raw _byte", "", EditRawDraft),
+                new MenuItem("Re_vert raw draft", "", () => StartRawDraft(_workbench.RevertRawDraftAsync)),
+                new MenuItem("_Verify legacy checksum", "", () => StartRawDraft(_workbench.VerifyRawChecksumAsync)),
+                new MenuItem("_Apply legacy checksum offline", "", () => StartRawDraft(_workbench.ApplyRawChecksumAsync)),
+                new MenuItem("Export raw d_raft", "", () => SaveFile("Raw block draft", path => _workbench.ExportRawDraftAsync(path))),
+                new MenuItem("Write raw block (disabled)", "", () => StartRawDraft(_workbench.RequestRawWriteAsync)),
+                new MenuItem("Legacy block read (disabled)", "", () => StartRawDraft(_workbench.RequestLegacyBlockReadAsync))
             }),
             new MenuBarItem("_FA/VO", new[]
             {
@@ -66,11 +92,16 @@ public sealed class WorkbenchWindow : Toplevel
             }),
             new MenuBarItem("_Backups", new[]
             {
-                new MenuItem("_Inspect directory", "", () => PromptPath("Backup directory", path => _workbench.InspectBackupAsync(path)))
+                new MenuItem("_Snapshot suggested DIDs", "", BackupSuggested),
+                new MenuItem("_Inspect directory", "", () => PromptPath("Backup directory", path => _workbench.InspectBackupAsync(path))),
+                new MenuItem("_Review restore", "", ReviewRestore),
+                new MenuItem("Restore _selected snapshot", "", RestoreSelected),
+                new MenuItem("_Open backup folder", "", OpenBackupFolder)
             }),
             new MenuBarItem("_Settings", new[]
             {
                 new MenuItem("_Connection", "", ConnectionSettings),
+                new MenuItem("Diagnostic _timeout", "", DiagnosticTimeout),
                 new MenuItem("_Local tool paths", "", ToolPaths),
                 new MenuItem("_Inspect installations", "", () => Start(_workbench.InspectInstallationsAsync)),
                 new MenuItem("_Save settings", "", () => Start(() => _workbench.SaveSettingsAsync(_settingsPath)))
@@ -78,6 +109,7 @@ public sealed class WorkbenchWindow : Toplevel
             new MenuBarItem("_Help", new[]
             {
                 new MenuItem("_About / limitations", "", () => ShowScreen("Help")),
+                new MenuItem("Show _logs", "", () => ShowScreen("Logs")),
                 new MenuItem("_Cancel operation (F4)", "", _workbench.Cancel)
             })
         });
@@ -90,7 +122,11 @@ public sealed class WorkbenchWindow : Toplevel
         _details = new TextView { X = Pos.Right(_items), Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), ReadOnly = true, WordWrap = true };
         _body.Add(searchLabel, _search, _items, _details);
         _items.SelectedItemChanged += _ => ShowSelection();
-        _items.OpenSelectedItem += _ => { if (_screen == "FA/VO") EditFa(); };
+        _items.OpenSelectedItem += _ =>
+        {
+            if (_screen == "FA/VO") EditFa();
+            else if (_screen == "DIDs") ReadSelectedDefinition();
+        };
         _logs = new TextView { X = 0, Y = Pos.Bottom(_body), Width = Dim.Fill(), Height = 4, ReadOnly = true, WordWrap = false, CanFocus = false };
         _status = new Label("") { X = 0, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
         var keys = new StatusBar(new[]
@@ -161,6 +197,29 @@ public sealed class WorkbenchWindow : Toplevel
                 .Where(f => $"{f.Path} {f.Value}".Contains(search, StringComparison.OrdinalIgnoreCase)).ToArray();
             _items.SetSource(_visibleCafFields.Select(f => $"{f.Path.Split('/').Last()} = {f.Value}").ToList());
         }
+        else if (_screen == "DIDs")
+        {
+            _visibleDefinitions = _workbench.DiagnosticDefinitions
+                .Where(d => $"{d.Did:X4} {d.Name}".Contains(search, StringComparison.OrdinalIgnoreCase)).ToArray();
+            _items.SetSource(_visibleDefinitions.Select(d => $"0x{d.Did:X4} {d.Name}").ToList());
+        }
+        else if (_screen == "Diagnostics")
+        {
+            _visibleDiagnostics = _workbench.DiagnosticReadings
+                .Where(r => $"{r.Ecu:X2} {r.Did:X4} {r.Name} {r.Status}".Contains(search, StringComparison.OrdinalIgnoreCase)).ToArray();
+            _items.SetSource(_visibleDiagnostics.Select(r => $"0x{r.Ecu:X2} {r.Name} [{r.Status}]").ToList());
+        }
+        else if (_screen == "Restore")
+        {
+            _visibleRestoreEntries = (_workbench.RestoreInspection?.Manifest.Entries ?? new List<BackupEntry>())
+                .Where(e => e != null && $"{e.EcuAddress:X2} {e.Did:X4} {e.EcuName}".Contains(search, StringComparison.OrdinalIgnoreCase)).ToArray();
+            _items.SetSource(_visibleRestoreEntries.Select(e => $"0x{e.EcuAddress:X2}/0x{e.Did:X4} {e.EcuName}").ToList());
+        }
+        else if (_screen == "Logs")
+        {
+            _visibleLogs = _workbench.Logs.Where(line => line.Contains(search, StringComparison.OrdinalIgnoreCase)).ToArray();
+            _items.SetSource(_visibleLogs.ToList());
+        }
         else
             _items.SetSource(new List<string> { _screen == "Help" ? "Read-only preview" : "No validated FDL backend" });
         if (_items.Source.Count > 0)
@@ -179,6 +238,8 @@ public sealed class WorkbenchWindow : Toplevel
                 PreviewCapabilities.FaReadUnavailable + "\n\n" + PreviewCapabilities.CodingUnavailable,
             _ => _workbench.Details
         };
+        if (_screen is "DIDs" or "Diagnostics" or "Restore" or "Logs")
+            ShowSelection();
         _logs.Text = string.Join("\n", _workbench.Logs.TakeLast(4));
         SetNeedsDisplay();
     }
@@ -225,6 +286,26 @@ public sealed class WorkbenchWindow : Toplevel
                 $"Interpretation: {(parameter.Interpretations.Count == 0 ? "(unknown)" : string.Join(", ", parameter.Interpretations))}\n" +
                 $"Storage: {parameter.Start} - {parameter.End}\nMask: {parameter.Mask}\n\nNo editing or writing is enabled.";
         }
+        if (_screen == "DIDs" && _items.SelectedItem >= 0 && _items.SelectedItem < _visibleDefinitions.Length)
+        {
+            var definition = _visibleDefinitions[_items.SelectedItem];
+            _details.Text = $"ECU 0x{_workbench.DiagnosticDefinitionEcu:X2} / DID 0x{definition.Did:X4}\n{definition.Name}\n\n" +
+                "ODX names and layouts are candidates, not a verified ECU variant. Enter reads this DID.";
+        }
+        if (_screen == "Diagnostics" && _items.SelectedItem >= 0 && _items.SelectedItem < _visibleDiagnostics.Length)
+            _details.Text = Workbench.Format(_visibleDiagnostics[_items.SelectedItem]);
+        if (_screen == "Restore" && _items.SelectedItem >= 0 && _items.SelectedItem < _visibleRestoreEntries.Length)
+        {
+            var entry = _visibleRestoreEntries[_items.SelectedItem];
+            _details.Text = $"RESTORE REVIEW - LIVE RESTORE DISABLED\nECU 0x{entry.EcuAddress:X2} / DID 0x{entry.Did:X4}\n" +
+                $"Name: {entry.EcuName}\nFile: {entry.FileName}\nBytes: {entry.SizeBytes}\nSHA-256: {entry.Sha256}\n" +
+                $"Backup VIN: {_workbench.RestoreInspection?.Manifest.Vin}\n" +
+                $"Connected VIN: {_workbench.Vin ?? "(not verified)"}\n" +
+                $"Integrity: {(_workbench.RestoreInspection?.IsValid == true ? "verified (not ECU compatibility)" : "FAILED")}\n" +
+                "A target-specific backend and safety qualification are required before any restore.";
+        }
+        if (_screen == "Logs" && _items.SelectedItem >= 0 && _items.SelectedItem < _visibleLogs.Length)
+            _details.Text = _visibleLogs[_items.SelectedItem];
     }
 
     private void ReadCoding()
@@ -353,6 +434,184 @@ public sealed class WorkbenchWindow : Toplevel
         }
     }
 
+    private void ProbeEcu()
+    {
+        try
+        {
+            byte ecu = SelectedEcu();
+            Start(() => _workbench.ProbeAsync(ecu));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.ErrorQuery("Check ECU", ex.Message, "OK");
+        }
+    }
+
+    private void ReadDmeReport()
+    {
+        ShowScreen("Vehicle");
+        Start(_workbench.ReadDmeReportAsync);
+    }
+
+    private void LoadDiagnosticData()
+    {
+        try
+        {
+            byte ecu = SelectedEcu();
+            ShowScreen("DIDs");
+            Start(() => _workbench.LoadDiagnosticDataAsync(ecu));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.ErrorQuery("Load ODX DIDs", ex.Message, "OK");
+        }
+    }
+
+    private void ReadSelectedDefinition()
+    {
+        try
+        {
+            if (_screen != "DIDs" || _workbench.DiagnosticDefinitionEcu is not byte ecu ||
+                _items.SelectedItem < 0 || _items.SelectedItem >= _visibleDefinitions.Length)
+                throw new InvalidOperationException("Load ODX DIDs and select a definition first.");
+            ushort did = _visibleDefinitions[_items.SelectedItem].Did;
+            ShowScreen("Vehicle");
+            Start(() => _workbench.ReadDidAsync(ecu, did));
+        }
+        catch (Exception ex)
+        {
+            MessageBox.ErrorQuery("Read ODX DID", ex.Message, "OK");
+        }
+    }
+
+    private void ExportDiagnosticPayload()
+    {
+        if (_screen != "Diagnostics" || _items.SelectedItem < 0 || _items.SelectedItem >= _visibleDiagnostics.Length)
+        {
+            MessageBox.ErrorQuery("Export diagnostic payload", "Show diagnostic results and select a reading first.", "OK");
+            return;
+        }
+        var reading = _visibleDiagnostics[_items.SelectedItem];
+        SaveFile("Diagnostic payload", path => _workbench.ExportDiagnosticPayloadAsync(reading, path));
+    }
+
+    private void CopyDiagnosticCommand()
+    {
+        try
+        {
+            if (_screen != "Diagnostics" || _items.SelectedItem < 0 || _items.SelectedItem >= _visibleDiagnostics.Length)
+                throw new InvalidOperationException("Show diagnostic results and select a reading first.");
+            string command = _workbench.DiagnosticCommand(_visibleDiagnostics[_items.SelectedItem]);
+            if (!Clipboard.TrySetClipboardData(command))
+                throw new InvalidOperationException("Clipboard is unavailable in this terminal.");
+            MessageBox.Query("CLI command", "Copied using the endpoint recorded when the reading was made.", "OK");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+        {
+            MessageBox.ErrorQuery("CLI command", ex.Message, "OK");
+        }
+    }
+
+    private void BackupSuggested()
+    {
+        if (MessageBox.Query("Snapshot suggested DIDs",
+            "Read suggested DIDs from responding ECUs? This is not a full-vehicle or validated coding backup.", "Read", "Cancel") != 0)
+            return;
+        ShowScreen("Vehicle");
+        Start(_workbench.BackupSuggestedAsync);
+    }
+
+    private void OpenBackupFolder()
+    {
+        try
+        {
+            string path = _workbench.BackupDirectory;
+            Directory.CreateDirectory(path);
+            Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true });
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            MessageBox.ErrorQuery("Backup folder", ex.Message, "OK");
+        }
+    }
+
+    private void ReviewRestore()
+    {
+        string? path = Prompt("Review restore", "Backup directory", "");
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+        ShowScreen("Restore");
+        Start(() => _workbench.PrepareRestoreAsync(path));
+    }
+
+    private void RestoreSelected()
+    {
+        if (_screen != "Restore" || _items.SelectedItem < 0 || _items.SelectedItem >= _visibleRestoreEntries.Length)
+        {
+            MessageBox.ErrorQuery("Restore", "Review a backup and select a snapshot first.", "OK");
+            return;
+        }
+        Start(() => _workbench.RequestRestoreAsync(_visibleRestoreEntries[_items.SelectedItem]));
+    }
+
+    private void OpenRawDraft()
+    {
+        if (_screen != "Diagnostics" || _items.SelectedItem < 0 || _items.SelectedItem >= _visibleDiagnostics.Length)
+        {
+            MessageBox.ErrorQuery("Raw block draft", "Show diagnostic results and select a successful DID reading first.", "OK");
+            return;
+        }
+        var reading = _visibleDiagnostics[_items.SelectedItem];
+        ShowScreen("Raw block");
+        Start(() => _workbench.OpenRawDraftAsync(reading));
+    }
+
+    private void EditRawDraft()
+    {
+        string? offsetText = Prompt("Edit raw block offline", "Byte offset (hex)", "0");
+        if (offsetText == null)
+            return;
+        string? valueText = Prompt("Edit raw block offline", "New byte value (two hex digits)", "00");
+        if (valueText == null)
+            return;
+        if (!int.TryParse(offsetText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int offset) ||
+            valueText.Length != 2 || !byte.TryParse(valueText, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte value))
+        {
+            MessageBox.ErrorQuery("Edit raw block", "Enter a hexadecimal offset and exactly two hexadecimal digits for the byte.", "OK");
+            return;
+        }
+        ShowScreen("Raw block");
+        Start(() => _workbench.EditRawDraftAsync(offset, value));
+    }
+
+    private void StartRawDraft(Func<Task> action)
+    {
+        ShowScreen("Raw block");
+        Start(action);
+    }
+
+    private void ReadRequest()
+    {
+        try
+        {
+            string? address = Prompt("Read-only request", "ECU address (two hex digits)", "10");
+            if (address == null)
+                return;
+            if (address.Length != 2 || !byte.TryParse(address, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out byte ecu))
+                throw new FormatException("Enter exactly two hexadecimal digits for the ECU address.");
+            string? input = Prompt("Read-only request", "22 <DID>, 19 02 <mask>, or 3E 00 (hex)", "22 F1 90");
+            if (input == null)
+                return;
+            byte[] request = Convert.FromHexString(string.Concat(input.Where(c => !char.IsWhiteSpace(c))));
+            ShowScreen("Vehicle");
+            Start(() => _workbench.ReadRequestAsync(ecu, request));
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
+        {
+            MessageBox.ErrorQuery("Read-only request", ex.Message, "OK");
+        }
+    }
+
     private void EditFa()
     {
         if (_workbench.IsBusy)
@@ -393,6 +652,20 @@ public sealed class WorkbenchWindow : Toplevel
         _workbench.Settings.Port = number;
     }
 
+    private void DiagnosticTimeout()
+    {
+        string? value = Prompt("Diagnostic timeout", "Per-request timeout in milliseconds (100-30000)",
+            _workbench.RequestTimeout.TotalMilliseconds.ToString(CultureInfo.InvariantCulture));
+        if (value == null)
+            return;
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int milliseconds))
+        {
+            MessageBox.ErrorQuery("Diagnostic timeout", "Enter a whole number of milliseconds.", "OK");
+            return;
+        }
+        Start(() => _workbench.SetRequestTimeoutAsync(milliseconds));
+    }
+
     private void ToolPaths()
     {
         if (_workbench.IsBusy)
@@ -403,6 +676,14 @@ public sealed class WorkbenchWindow : Toplevel
         string? psdz = Prompt("Local tools", "PSdZData directory", _workbench.Settings.PsdzDataPath);
         if (psdz == null)
             return;
+        string? series = Prompt("Local tools", "PSdZData main series (for example F020)", _workbench.Settings.PsdzSeries);
+        if (series == null)
+            return;
+        if (string.IsNullOrWhiteSpace(series) || series.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_'))
+        {
+            MessageBox.ErrorQuery("Local tools", "Enter a main series containing only letters, digits or underscores.", "OK");
+            return;
+        }
         string? esys = Prompt("Local tools", "E-Sys directory", _workbench.Settings.EsysPath);
         if (esys == null)
             return;
@@ -413,6 +694,7 @@ public sealed class WorkbenchWindow : Toplevel
         if (java == null)
             return;
         _workbench.Settings.PsdzDataPath = psdz;
+        _workbench.Settings.PsdzSeries = series;
         _workbench.Settings.EsysPath = esys;
         _workbench.Settings.IstaPath = ista;
         _workbench.Settings.JavaPath = java;

@@ -14,6 +14,8 @@ Coding-1 NCD reads and parameter decoding are available with exact matching CAFs
 Vehicle FA acquisition, FDL editing/writes, FA writes, VO coding, flashing, resets,
 and service actuations are unavailable. Installed E-Sys jars alone do not establish
 a supported coding backend. The TUI does not expose legacy raw-write APIs.
+ZGW voltage reading is not available: no gateway request and scaling have
+been verified for this vehicle. A nominal ENET voltage is not a measurement.
 
 ## Coding annotations (parameter names)
 
@@ -56,6 +58,11 @@ Use an interactive terminal at least 80 columns by 24 rows. Redirected input/out
 is rejected; use the existing `tools\BmwCoder.Cli` JSON tool for automation.
 `--help` works without an interactive terminal.
 
+Suggested-DID snapshots use default-session reads only. The legacy GUI's
+extended-session block reads are not exposed; some targets may therefore be
+unavailable. The raw editor and legacy checksum functions are offline only and
+do not establish that a block is safe to write.
+
 | Key / menu | Action |
 |---|---|
 | F2 / Vehicle > Connect | Connect to the demo or configured host and verify VIN |
@@ -66,10 +73,17 @@ is rejected; use the existing `tools\BmwCoder.Cli` JSON tool for automation.
 | Tab / Shift+Tab, Alt+menu key | Move focus / open menus |
 | Search | Filter ECUs, FA/CAF fields, or decoded parameter identifiers/names/values |
 | Vehicle > Read DID / Read faults | Single-DID reads or DTC status reads; no session changes, resets or clears |
+| Vehicle > Check ECU response / Read DME report | Probe a selected ECU or run the fixed-address read-only DME report; the demo does not model a DME report |
+| Vehicle > Read-only request | Enter an ECU address and a single DID read, DTC status read, or TesterPresent request |
+| Vehicle > Load ODX DIDs / Configure ISTA fault texts | Load configured local data explicitly for candidate DID browsing and diagnostic decoding or fault descriptions |
+| Vehicle > Show diagnostic results | Browse readings and export results as JSON or a selected payload as binary |
 | FA/VO | Import XML, browse/edit selected fields offline, review diff, export to a new file |
 | Coding | Read coding/decode parameters, open an NCD offline, export the original NCD, browse CAF definitions or inspect raw files |
-| Backups | Inspect an existing backup directory and verify snapshot sizes/SHA-256 |
+| Coding > Open selected DID as raw draft | Edit, diff, revert, export, or apply a legacy checksum to a diagnostic payload offline; no vehicle write is available |
+| Backups | Read-only suggested-DID snapshots, integrity inspection and restore review; snapshots are not full-vehicle or validated coding backups, and live restore is disabled |
 | Settings | Set connection/tool paths, inspect local installations, explicitly save settings |
+| Settings > Diagnostic timeout | Set a per-request timeout for the current session (not saved) |
+| Help > Show logs | Browse and filter the recent operation log |
 
 Try F2, F3, then **FA/VO > Load synthetic FA > Show fields** in demo mode.
 Select a field and press Enter to edit it, then review Diff and Export XML.
@@ -195,67 +209,10 @@ still require qualification. Do not assume a backup, checksum, ECU address, or m
 name establishes that a write would be safe. A validated PSdZ integration and
 target-specific bench/vehicle evidence are required before enabling FDL writes.
 
-The existing JSON CLI and WinForms source remain available. The new TUI release
-package excludes the WinForms app and all proprietary BMW components.
+The JSON CLI remains available alongside the TUI. The release package contains
+no proprietary BMW components.
 
----
-
-## Legacy WinForms prototype
-
-The documentation below describes the older raw-block prototype, **not the TUI**.
-Its ECU tables and write/checksum assumptions are not a verified compatibility list
-and must not be treated as instructions for E-Sys-style FDL coding.
-
-A fast, lightweight, and safety-first Windows desktop application (.NET 8 WinForms) for reading, modifying, verifying, and writing raw ECU coding blocks on BMW F-Series vehicles via standard ENET cables.
-
----
-
-## 1. What It Does & What It Doesn't
-
-### What It Does (MVP Scope)
-- Connects directly to BMW F-Series vehicles over standard Ethernet OBD (ENET cable) via the native **HSFZ protocol** on TCP port `6801`.
-- Probes and discovers reachable Electronic Control Units (ECUs) on the vehicle diagnostic bus.
-- Automatically reads and displays the vehicle's unique 17-character VIN from the Central Gateway (`0x10`).
-- Reads raw diagnostic coding blocks via UDS service `0x22` (ReadDataByIdentifier) for user-selected DIDs (e.g. `0x3000`).
-- Provides an integrated owner-drawn hex editor with color-coded diffing against the baseline block.
-- Recalculates and verifies critical ECU checksums (CRC16-CCITT, XOR-8, Sum-8).
-- Implements a strict, multi-layer safe write pipeline:
-  1. Read-only by default.
-  2. Automatic, deterministic disk snapshot to `%APPDATA%\BmwCoder\backups` before every write.
-  3. Write hard-blocked if checksum algorithm is unknown or invalid.
-  4. Write hard-blocked on powertrain or safety-critical modules (DME/DDE, ACSM).
-  5. Modal confirmation requiring the user to explicitly type `WRITE`.
-  6. Automatic post-write re-read and byte-for-byte verification.
-- Complete full-car backup and selective block-by-block restoration.
-
-### What It Does NOT Do (Explicit Non-Goals for MVP)
-- **No PSdZData / SGBD / NCD parsing**: Does not parse proprietary BMW XML/PRG/NCD template databases.
-- **No named toggles**: No high-level toggles (e.g. "Enable Video in Motion"); works strictly with raw block memory.
-- **No FA / VO editing**: Vehicle order editing is out of scope.
-- **No flashing**: Does not flash firmware images (`*.swfl`, `*.swfk`).
-- **No G-Series / I-Series / E-Series**: F-Series ENET only.
-- **No wireless adapters**: Requires wired Ethernet (ENET cable).
-
----
-
-## 2. Supported ECUs
-
-| Address | Module | Name | Default DID | Checksum | Writable |
-|---|---|---|---|---|---|
-| `0x10` | **ZGW** | Central Gateway | `0xF190` (VIN) | N/A | No (Gateway) |
-| `0x40` | **CAS / FEM** | Car Access System / Front Electronic Module | `0x3000` | XOR-8 | Yes |
-| `0x60` | **KOMBI** | Instrument Cluster | `0x3000` | CRC16-CCITT (`0x0000`) | Yes |
-| `0x63` | **HU_NBT** | Head Unit (NBT / EntryNav) | `0x3000` | CRC16-CCITT (`0xFFFF`) | Yes |
-| `0x64` | **HU_CIC** | Head Unit (CIC - Legacy) | `0x3000` | CRC16-CCITT (`0xFFFF`) | Yes |
-| `0x20` | **REM / JBBF** | Rear Electronic Module / Junction Box | `0x3000` | XOR-8 | Yes |
-| `0x12` | **DME / DDE** | Engine Control Module | — | Locked | **NO (Locked)** |
-| `0x30` | **ACSM** | Airbag / Crash Safety Module | — | Locked | **NO (Locked)** |
-
-*For detailed notes, see [docs/ECU_NOTES.md](docs/ECU_NOTES.md).*
-
----
-
-## 3. Hardware & Network Setup
+## Hardware & Network Setup
 
 1. **Cable**: Standard BMW ENET (OBD-II to RJ45 Ethernet) cable.
 2. **Connection**: Plug the OBD-II connector into the vehicle diagnostic port (under the driver-side dashboard) and the RJ45 jack into your Windows PC.
@@ -272,13 +229,13 @@ A fast, lightweight, and safety-first Windows desktop application (.NET 8 WinFor
 
 ---
 
-## 4. Console Diagnostic Harness (`HsfzPing`)
+## Console Diagnostic Harness (`HsfzPing`)
 
-Before launching the GUI, you can verify physical connectivity using the included lightweight console utility:
+Before launching the TUI, you can verify physical connectivity using the included lightweight console utility:
 
 ```pwsh
 # Usage: HsfzPing [host] [port] [ecu_address_hex]
-dotnet run --project tools/HsfzPing/HsfzPing.csproj -- 169.254.16.17 6801 40
+dotnet run --project tools\HsfzPing\HsfzPing.csproj -- 169.254.16.17 6801 40
 ```
 
 Expected output upon successful communication with CAS (`0x40`):
@@ -295,48 +252,13 @@ SUCCESS: Positive TesterPresent response (7E 00) received!
 
 ---
 
-## 5. Building & Packaging
-
-### Run Unit Tests
-```pwsh
-dotnet test BmwCoder.slnx -c Release
-```
-
-### Build Single-File Distributable Executable
-```pwsh
-dotnet publish src/BmwCoder.App/BmwCoder.App.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
-```
-The resulting self-contained, zero-dependency executable is located at:
-`src\BmwCoder.App\bin\Release\net8.0-windows\win-x64\publish\BmwCoder.App.exe`.
-
----
-
-## 6. Legacy Coding Walkthrough (Unverified)
-
-This historical walkthrough describes an experimental write path, not a validated
-or recommended procedure. Do not use it to modify a vehicle.
-
-1. Launch `BmwCoder.App.exe`.
-2. Click **Connect...**, verify IP `169.254.16.17`, and click Connect.
-3. The app connects and runs **Discover ECUs**, listing online modules and reading the vehicle VIN.
-4. Double-click **HU_NBT** or **KOMBI** to open the **Coding Block Editor**.
-5. Select DID `0x3000` and click **Read Block**.
-6. The hex editor populates with raw memory, and an uncompressed backup is saved to `%APPDATA%\BmwCoder\backups\<VIN>\<timestamp>\`.
-7. Modify desired byte(s). Notice modified bytes are highlighted in orange and diff count updates in real time.
-8. Click **Apply Checksum** to recalculate the block checksum. Checksum badge turns green (`VALID`).
-9. Click **Write to ECU**.
-10. In the confirmation dialog, review the modified byte count, check the backup acknowledgment, type **`WRITE`**, and confirm.
-11. The application switches to extended session, writes the block, reboots the module if required, and verifies the write by reading back the live data.
-
----
-
-## 7. Clean-Room Repository Statement
+## Clean-Room Repository Statement
 
 This repository contains **NO proprietary BMW intellectual property, binary databases, SGBD (.prg) scripts, PSdZData archives, or NCD templates**. All framing, UDS service definitions, and checksum algorithms are clean-room implementations constructed from open diagnostic standards (ISO 14229-1) and public protocol analysis.
 
 ---
 
-## 8. Legal Disclaimer
+## Legal Disclaimer
 
 > [!CAUTION]
 > This software is provided under the PolyForm Noncommercial License 1.0.0.
@@ -344,6 +266,6 @@ This repository contains **NO proprietary BMW intellectual property, binary data
 
 ---
 
-## 9. License
+## License
 
 This project is licensed under the **PolyForm Noncommercial License 1.0.0** — see the [LICENSE](LICENSE) file for the complete terms.

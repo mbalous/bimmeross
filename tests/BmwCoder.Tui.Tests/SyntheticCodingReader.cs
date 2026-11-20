@@ -41,13 +41,22 @@ internal sealed class SyntheticLiveVehicle : IReadOnlyVehicle
 {
     public bool IsDemo => false;
     public bool IsConnected { get; private set; }
+    public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(5);
+    public string BackupDirectory => "synthetic-backups";
     public string? Vin => IsConnected ? "WBATEST0000000001" : null;
     public IReadOnlyList<string> Warnings => Array.Empty<string>();
     public Task ConnectAsync(string host, int port, CancellationToken token) { IsConnected = true; return Task.CompletedTask; }
     public Task<IReadOnlyList<EcuInfo>> DiscoverAsync(CancellationToken token) =>
         Task.FromResult<IReadOnlyList<EcuInfo>>(new[] { new EcuInfo { Address = 0x63, Name = "synthetic-audio" } });
-    public Task<DiagnosticReading> ReadDidAsync(byte ecu, ushort did, CancellationToken token) => throw new NotSupportedException();
+    public Task<DiagnosticReading> ReadDidAsync(byte ecu, ushort did, CancellationToken token) =>
+        Task.FromResult(new DiagnosticReading { Ecu = ecu, Did = did, Name = "synthetic", RequestHex = $"22{did:X4}", PayloadHex = "01" });
     public Task<DiagnosticReading> ReadFaultsAsync(byte ecu, CancellationToken token) => throw new NotSupportedException();
+    public Task<DiagnosticReading> ReadRequestAsync(byte ecu, byte[] request, CancellationToken token) => throw new NotSupportedException();
+    public Task<DiagnosticReading> ProbeAsync(byte ecu, CancellationToken token) => throw new NotSupportedException();
+    public Task<IReadOnlyList<DiagnosticReading>> ReadDmeReportAsync(IProgress<DiagnosticReading>? progress, CancellationToken token) => throw new NotSupportedException();
+    public Task<IReadOnlyList<DiagnosticDefinition>> LoadDiagnosticDataAsync(string path, string series, byte ecu, CancellationToken token) => throw new NotSupportedException();
+    public void ConfigureFaultTexts(string path) => throw new NotSupportedException();
+    public Task<ReadOnlyBackup> BackupSuggestedAsync(IReadOnlyList<EcuInfo> ecus, IProgress<ReadOnlyBackup>? progress, CancellationToken token) => throw new NotSupportedException();
     public void Disconnect() => IsConnected = false;
     public void Dispose() => Disconnect();
 }
