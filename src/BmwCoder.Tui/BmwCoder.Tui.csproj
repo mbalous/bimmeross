@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="BmwCoder.Tui.Tests" />
     <PackageReference Include="Terminal.Gui" Version="1.19.0" />
     <ProjectReference Include="..\BmwCoder.Core\BmwCoder.Core.csproj" />
     <ProjectReference Include="..\BmwCoder.Psdz\BmwCoder.Psdz.csproj" />

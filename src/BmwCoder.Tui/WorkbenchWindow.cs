@@ -20,6 +20,9 @@ public sealed class WorkbenchWindow : Toplevel
     private readonly TextView _details;
     private readonly TextView _logs;
     private readonly Label _status;
+    private readonly Label _workflow;
+    private readonly object _activityTimer;
+    private int _activityFrame;
     private string _screen = "Vehicle";
     private bool _closed;
     private EcuInfo[] _visibleEcus = Array.Empty<EcuInfo>();
@@ -41,9 +44,9 @@ public sealed class WorkbenchWindow : Toplevel
             new MenuBarItem("_Vehicle", new[]
             {
                 new MenuItem("_Show ECUs", "", () => ShowScreen("Vehicle")),
-                new MenuItem("_Find gateway", "", FindGateway),
+                new MenuItem("_Find gateway (F5)", "", FindGateway),
                 new MenuItem("_Connect (F2)", "", () => Start(_workbench.ConnectAsync)),
-                new MenuItem("_Discover (F3)", "", () => Start(_workbench.DiscoverAsync)),
+                new MenuItem("_Discover ECUs (F3)", "", DiscoverEcus),
                 new MenuItem("D_isconnect", "", () => Start(_workbench.DisconnectAsync)),
                 new MenuItem("_Read DID", "", ReadDid),
                 new MenuItem("Read _faults", "", ReadFaults),
@@ -113,14 +116,22 @@ public sealed class WorkbenchWindow : Toplevel
                 new MenuItem("_Cancel operation (F4)", "", _workbench.Cancel)
             })
         });
-        _header = new Label("") { X = 0, Y = 1, Width = Dim.Fill(), Height = 2 };
+        var accent = new ColorScheme
+        {
+            Normal = Terminal.Gui.Attribute.Make(Color.BrightCyan, Color.Blue),
+            Focus = Terminal.Gui.Attribute.Make(Color.White, Color.Blue),
+            HotNormal = Terminal.Gui.Attribute.Make(Color.White, Color.Blue),
+            HotFocus = Terminal.Gui.Attribute.Make(Color.White, Color.Blue)
+        };
+        _header = new Label("") { X = 0, Y = 1, Width = Dim.Fill(), Height = 2, ColorScheme = accent };
         _body = new FrameView("Vehicle") { X = 0, Y = 3, Width = Dim.Fill(), Height = Dim.Fill(6) };
         var searchLabel = new Label("Search:") { X = 0, Y = 0 };
         _search = new TextField("") { X = 8, Y = 0, Width = Dim.Fill() };
         _search.TextChanged += _ => RefreshState();
-        _items = new ListView { X = 0, Y = 2, Width = Dim.Percent(35), Height = Dim.Fill() };
-        _details = new TextView { X = Pos.Right(_items), Y = 2, Width = Dim.Fill(), Height = Dim.Fill(), ReadOnly = true, WordWrap = true };
-        _body.Add(searchLabel, _search, _items, _details);
+        _workflow = new Label("") { X = 0, Y = 2, Width = Dim.Fill(), Height = 1 };
+        _items = new ListView { X = 0, Y = 4, Width = Dim.Percent(35), Height = Dim.Fill() };
+        _details = new TextView { X = Pos.Right(_items), Y = 4, Width = Dim.Fill(), Height = Dim.Fill(), ReadOnly = true, WordWrap = true };
+        _body.Add(searchLabel, _search, _workflow, _items, _details);
         _items.SelectedItemChanged += _ => ShowSelection();
         _items.OpenSelectedItem += _ =>
         {
@@ -128,11 +139,12 @@ public sealed class WorkbenchWindow : Toplevel
             else if (_screen == "DIDs") ReadSelectedDefinition();
         };
         _logs = new TextView { X = 0, Y = Pos.Bottom(_body), Width = Dim.Fill(), Height = 4, ReadOnly = true, WordWrap = false, CanFocus = false };
-        _status = new Label("") { X = 0, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1 };
+        _status = new Label("") { X = 0, Y = Pos.AnchorEnd(2), Width = Dim.Fill(), Height = 1, ColorScheme = accent };
         var keys = new StatusBar(new[]
         {
             new StatusItem(Key.F2, "~F2~ Connect", () => Start(_workbench.ConnectAsync)),
-            new StatusItem(Key.F3, "~F3~ Discover", () => Start(_workbench.DiscoverAsync)),
+            new StatusItem(Key.F3, "~F3~ Discover ECUs", DiscoverEcus),
+            new StatusItem(Key.F5, "~F5~ Find gateway", FindGateway),
             new StatusItem(Key.F4, "~F4~ Cancel", _workbench.Cancel),
             new StatusItem(Key.CtrlMask | Key.Q, "~Ctrl+Q~ Quit", RequestQuit)
         });
@@ -141,6 +153,16 @@ public sealed class WorkbenchWindow : Toplevel
         Add(menu, _header, _body, _logs, _status, keys, _smallTerminal);
         LayoutComplete += _ => UpdateSize();
         _workbench.Changed += OnChanged;
+        _activityTimer = Application.MainLoop.AddTimeout(TimeSpan.FromMilliseconds(150), _ =>
+        {
+            if (_closed) return false;
+            if (_workbench.IsBusy)
+            {
+                _activityFrame++;
+                RefreshStatus();
+            }
+            return true;
+        });
         RefreshState();
     }
 
@@ -158,8 +180,9 @@ public sealed class WorkbenchWindow : Toplevel
         switch (keyEvent.Key)
         {
             case Key.F2: Start(_workbench.ConnectAsync); return true;
-            case Key.F3: Start(_workbench.DiscoverAsync); return true;
+            case Key.F3: DiscoverEcus(); return true;
             case Key.F4: _workbench.Cancel(); return true;
+            case Key.F5: FindGateway(); return true;
             case Key.CtrlMask | Key.Q: RequestQuit(); return true;
             default: return base.ProcessKey(keyEvent);
         }
@@ -169,8 +192,13 @@ public sealed class WorkbenchWindow : Toplevel
     {
         _header.Text = $"BimmerOSS | {(_workbench.IsDemo ? "DEMO (no sockets)" : "LIVE")} | READ-ONLY PREVIEW\n" +
             $"{(_workbench.IsConnected ? "Connected" : "Disconnected")} | VIN: {_workbench.Vin ?? "(unknown)"} | FDL writes: unavailable";
-        _status.Text = _workbench.Status;
-        _body.Title = _screen;
+        RefreshStatus();
+        _body.Title = _screen == "Vehicle" ? $"Vehicle / ECUs ({_workbench.Ecus.Count})" : _screen;
+        _workflow.Text = _screen == "Vehicle"
+            ? (_workbench.IsDemo
+                ? "DEMO: F2 Connect  >  F3 Discover ECUs"
+                : "GET STARTED: F5 Find gateway  >  F2 Connect  >  F3 Discover ECUs")
+            : "Tab: move focus  |  Enter: select  |  Alt: menus";
         int selected = _items.SelectedItem;
         string search = _search.Text?.ToString() ?? "";
         if (_screen == "Vehicle")
@@ -231,17 +259,41 @@ public sealed class WorkbenchWindow : Toplevel
             "Parameters" => _workbench.DecodedSummary,
             "Help" => "Terminal.Gui 1.19 / shared BimmerOSS libraries\n\n" +
                 "Tab / Shift+Tab: focus. Alt+menu key: menu. Enter: select/edit.\n" +
-                "F2: connect; F3: discover; F4: cancel; Ctrl+Q: exit.\n\n" +
-                "Default mode is synthetic demo. Use --live for explicit read-only vehicle connections.\n" +
+                "F5: find gateway; F2: connect; F3: discover ECUs; F4: cancel; Ctrl+Q: exit.\n\n" +
+                "Live read-only mode is the default; connections and gateway discovery are explicit. Use --demo for synthetic data without sockets.\n" +
                 "Import an FA XML document, select FA/VO > Show fields, then Edit or Enter.\n" +
                 "FA edits are offline and syntax-checked only. Exports never overwrite existing files.\n\n" +
                 PreviewCapabilities.FaReadUnavailable + "\n\n" + PreviewCapabilities.CodingUnavailable,
+            "Vehicle" when _workbench.Status == "Disconnected - read-only preview" =>
+                "WELCOME TO BIMMEROSS\n\n" +
+                (_workbench.IsDemo
+                    ? "Synthetic demo: press F2 to connect, then F3 to discover demo ECUs."
+                    : "1. Press F5 to find a gateway on your ENET interface, or set a host in Settings > Connection.\n" +
+                      "2. Press F2 to connect and verify the VIN.\n" +
+                      "3. Press F3 to discover ECU candidates.\n\n" +
+                      "Finding a gateway sends a bounded discovery broadcast; it does not connect.") +
+                "\n\nRead-only preview: vehicle coding writes are unavailable.",
             _ => _workbench.Details
         };
         if (_screen is "DIDs" or "Diagnostics" or "Restore" or "Logs")
             ShowSelection();
         _logs.Text = string.Join("\n", _workbench.Logs.TakeLast(4));
         SetNeedsDisplay();
+    }
+
+    private void RefreshStatus()
+    {
+        _status.Text = _workbench.IsBusy
+            ? $" {("|/-\\"[_activityFrame % 4])}  {_workbench.Status}  |  F4 cancels (disconnects)"
+            : $" {_workbench.Status}";
+        _status.SetNeedsDisplay();
+    }
+
+    private void DiscoverEcus()
+    {
+        _screen = "Vehicle";
+        _search.Text = "";
+        Start(_workbench.DiscoverAsync);
     }
 
     private void OnChanged()
@@ -392,6 +444,8 @@ public sealed class WorkbenchWindow : Toplevel
     {
         try
         {
+            if (_workbench.IsBusy)
+                throw new InvalidOperationException("Wait for the current operation or press F4 to cancel.");
             if (_workbench.IsDemo)
             {
                 MessageBox.Query("Demo mode", "No discovery packets are sent in demo mode. Use --live to select an ENET interface.", "OK");
@@ -673,31 +727,9 @@ public sealed class WorkbenchWindow : Toplevel
             MessageBox.ErrorQuery("Busy", "Wait for the current operation or press F4 to cancel.", "OK");
             return;
         }
-        string? psdz = Prompt("Local tools", "PSdZData directory", _workbench.Settings.PsdzDataPath);
-        if (psdz == null)
-            return;
-        string? series = Prompt("Local tools", "PSdZData main series (for example F020)", _workbench.Settings.PsdzSeries);
-        if (series == null)
-            return;
-        if (string.IsNullOrWhiteSpace(series) || series.Any(c => !char.IsAsciiLetterOrDigit(c) && c != '_'))
-        {
-            MessageBox.ErrorQuery("Local tools", "Enter a main series containing only letters, digits or underscores.", "OK");
-            return;
-        }
-        string? esys = Prompt("Local tools", "E-Sys directory", _workbench.Settings.EsysPath);
-        if (esys == null)
-            return;
-        string? ista = Prompt("Local tools", "ISTA directory", _workbench.Settings.IstaPath);
-        if (ista == null)
-            return;
-        string? java = Prompt("Local tools", "64-bit Java 8 java.exe (explicit path)", _workbench.Settings.JavaPath);
-        if (java == null)
-            return;
-        _workbench.Settings.PsdzDataPath = psdz;
-        _workbench.Settings.PsdzSeries = series;
-        _workbench.Settings.EsysPath = esys;
-        _workbench.Settings.IstaPath = ista;
-        _workbench.Settings.JavaPath = java;
+        using var dialog = new LocalToolsDialog(_workbench.Settings, _settingsPath, LocalToolDiscovery.Detect(_workbench.Settings));
+        Application.Run(dialog);
+        RefreshState();
     }
 
     private void OpenFile(string title, Func<string, Task> action)
@@ -747,6 +779,7 @@ public sealed class WorkbenchWindow : Toplevel
         {
             _closed = true;
             _workbench.Changed -= OnChanged;
+            Application.MainLoop?.RemoveTimeout(_activityTimer);
         }
         base.Dispose(disposing);
     }

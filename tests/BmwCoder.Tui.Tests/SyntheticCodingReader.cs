@@ -41,11 +41,17 @@ internal sealed class SyntheticLiveVehicle : IReadOnlyVehicle
 {
     public bool IsDemo => false;
     public bool IsConnected { get; private set; }
+    public Func<CancellationToken, Task>? ConnectHook { get; set; }
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(5);
     public string BackupDirectory => "synthetic-backups";
     public string? Vin => IsConnected ? "WBATEST0000000001" : null;
     public IReadOnlyList<string> Warnings => Array.Empty<string>();
-    public Task ConnectAsync(string host, int port, CancellationToken token) { IsConnected = true; return Task.CompletedTask; }
+    public async Task ConnectAsync(string host, int port, CancellationToken token)
+    {
+        if (ConnectHook != null)
+            await ConnectHook(token);
+        IsConnected = true;
+    }
     public Task<IReadOnlyList<EcuInfo>> DiscoverAsync(CancellationToken token) =>
         Task.FromResult<IReadOnlyList<EcuInfo>>(new[] { new EcuInfo { Address = 0x63, Name = "synthetic-audio" } });
     public Task<DiagnosticReading> ReadDidAsync(byte ecu, ushort did, CancellationToken token) =>

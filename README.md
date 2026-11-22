@@ -44,11 +44,11 @@ that helper; using it requires an explicitly configured **64-bit Java 8** runtim
 not a compiler. Ordinary tests do not require Java 8, BMW files, or a vehicle.
 
 ```pwsh
-# Safe default: synthetic demo, no network connections
-dotnet run --project src\BmwCoder.Tui -- --demo
+# Default: live read-only mode; connects only when you choose Connect
+dotnet run --project src\BmwCoder.Tui
 
-# Explicit live mode: connects only when you choose Connect
-dotnet run --project src\BmwCoder.Tui -- --live
+# Synthetic demo, no network connections
+dotnet run --project src\BmwCoder.Tui -- --demo
 
 # Optional separate settings file
 dotnet run --project src\BmwCoder.Tui -- --demo --settings C:\local\bimmeross-settings.json
@@ -58,6 +58,18 @@ Use an interactive terminal at least 80 columns by 24 rows. Redirected input/out
 is rejected; use the existing `tools\BmwCoder.Cli` JSON tool for automation.
 `--help` works without an interactive terminal.
 
+On startup, **Local tools setup** checks saved paths, common local installation
+locations on fixed drives, `JAVA_HOME` and `PATH`. It pre-fills only paths that pass layout checks:
+ISTA PSdZ jars, providers, native-library directory and metadata; PSdZData CAF
+files; Java 8 release metadata and a 64-bit Windows executable; and optional E-Sys
+runtime files. The packaged helper is also checked. These checks do not run the
+discovered programs or establish compatibility. Missing paths may be left blank.
+**Use** applies the displayed paths for this session, **Save** persists them, and
+**Skip** leaves existing settings unchanged. Reopen the dialog under Settings >
+Local tool paths. Detection is bounded to common locations, so installations
+elsewhere may need to be entered manually. A missing `mainseries` dataset can
+still limit ODX diagnostics even when CAF files were found.
+
 Suggested-DID snapshots use default-session reads only. The legacy GUI's
 extended-session block reads are not exposed; some targets may therefore be
 unavailable. The raw editor and legacy checksum functions are offline only and
@@ -66,8 +78,8 @@ do not establish that a block is safe to write.
 | Key / menu | Action |
 |---|---|
 | F2 / Vehicle > Connect | Connect to the demo or configured host and verify VIN |
-| F3 / Vehicle > Discover | List ECU candidates; fallback catalog names are not verified variants |
-| Vehicle > Find gateway | Select an ENET IPv4 interface; send one bounded UDP identification broadcast; select the sole reply without connecting |
+| F3 / Vehicle > Discover ECUs | List ECU candidates after connecting; fallback catalog names are not verified variants |
+| F5 / Vehicle > Find gateway | Select an ENET IPv4 interface; send one bounded UDP identification broadcast; select the sole reply without connecting |
 | F4 | Cancel the current operation; cancellation disconnects the vehicle |
 | Ctrl+Q | Exit and release terminal/vehicle resources |
 | Tab / Shift+Tab, Alt+menu key | Move focus / open menus |
@@ -84,6 +96,11 @@ do not establish that a block is safe to write.
 | Settings | Set connection/tool paths, inspect local installations, explicitly save settings |
 | Settings > Diagnostic timeout | Set a per-request timeout for the current session (not saved) |
 | Help > Show logs | Browse and filter the recent operation log |
+
+In live mode, use F5 to find a gateway (or configure a host in Settings), then F2
+to connect and F3 to discover ECUs. Gateway discovery and ECU discovery are separate
+actions; neither runs automatically. The activity indicator and F4 cancellation are
+shown while an operation is running.
 
 Try F2, F3, then **FA/VO > Load synthetic FA > Show fields** in demo mode.
 Select a field and press Enter to edit it, then review Diff and Export XML.
@@ -142,8 +159,8 @@ The CAF command returns a summary rather than dumping proprietary XML.
 
 ### Read coding -> decode parameters
 
-Configure **PSdZData**, **ISTA** and **64-bit Java 8** under Settings. In `--live`
-mode, connect (F2), discover (F3), select an ECU, then choose
+Configure **PSdZData**, **ISTA** and **64-bit Java 8** under Settings. In live
+mode (the default, or `--live`), connect (F2), discover (F3), select an ECU, then choose
 **Coding > Read coding / decode**. Leave the CAF prompt blank for an ECU with one
 observed CAF, or specify the exact filename for a multi-CAF ECU. The reader obtains
 the ECU's real base variant/software inventory; it never substitutes a catalog
